@@ -1,0 +1,10 @@
+Как запушить в гит:
+git add .
+git commit -m "Название изменения"
+git push
+
+Как запустить:
+npm run dev
+
+Как забилдить:
+npm run build
