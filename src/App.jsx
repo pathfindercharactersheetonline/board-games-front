@@ -1,47 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import CONFIG from './config';
 
-// --- 1. КОНСТАНТЫ ---
 const ROLES = { PLAYER: 'игрок', MASTER: 'мастер', ADMIN: 'администратор' };
 
-const INITIAL_GAMES = [
-  { 
-    id: 1, 
-    title: "D&D: Шахта Фанделвера", 
-    master: "Алексей С.", 
-    players: 5, 
-    maxPlayers: 6, 
-    bookedUsers: [101, 102, 103, 104, 105], 
-    date: "2023-10-25T19:00", 
-    image: "https://images.unsplash.com", 
-    desc: "Классическое приключение для новичков." 
-  },
-  { 
-    id: 2, 
-    title: "Остров Катан", 
-    master: "Мария И.", 
-    players: 1, 
-    maxPlayers: 4, 
-    bookedUsers: [106], 
-    date: "2023-10-26T19:00", 
-    image: "https://images.unsplash.com", 
-    desc: "Мирная стратегия о колонизации острова." 
-  }
-];
-
-const INITIAL_PRIVILEGED = [
-  { id: 1, name: "Иван (Админ)", role: ROLES.ADMIN },
-  { id: 2, name: "Алексей С.", role: ROLES.MASTER },
-];
-
 export default function App() {
-  // --- 2. СОСТОЯНИЯ (STATE) ---
-  const [view, setView] = useState('list'); 
-  const [currentUser, setCurrentUser] = useState({ id: 99, name: "Ваш Герой", role: ROLES.ADMIN }); 
-  const [games, setGames] = useState(INITIAL_GAMES);
-  const [privilegedUsers, setPrivilegedUsers] = useState(INITIAL_PRIVILEGED);
-  const [selectedGame, setSelectedGame] = useState(null);
-  const [searchTerm, setSearchTerm] = useState("");
-
+  // --- Вспомогательная функция для даты ---
   const getMoscowDefaultDateTime = () => {
     const date = new Date();
     date.setDate(date.getDate() + 1);
@@ -51,73 +14,266 @@ export default function App() {
     return `${year}-${month}-${day}T19:00`;
   };
 
-  const [newGame, setNewGame] = useState({ title: '', maxPlayers: 4, date: getMoscowDefaultDateTime(), desc: '', image: 'https://images.unsplash.com' });
-  const [newUser, setNewUser] = useState({ name: '', role: ROLES.MASTER });
+  // --- 1. СОСТОЯНИЯ (STATE) ---
+  const [editingGame, setEditingGame] = useState(null);
+  const [view, setView] = useState('loading'); 
+  const [currentUser, setCurrentUser] = useState(null); 
+  const [games, setGames] = useState([]);
+  const [selectedGame, setSelectedGame] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [newGame, setNewGame] = useState({ 
+    title: '', 
+    max_players: 4,              // Было maxPlayers
+    date_time: getMoscowDefaultDateTime(), // Было date
+    description: '',             // Было desc
+    image_url: 'https://images.unsplash.com', // Было image
+    master_name: currentUser?.email || 'Мастер' // НОВОЕ ОБЯЗАТЕЛЬНОЕ ПОЛЕ
+  });
 
-  const isMasterOrAdmin = [ROLES.MASTER, ROLES.ADMIN].includes(currentUser.role);
-  const isAdmin = currentUser.role === ROLES.ADMIN;
+  // --- 2. ЛОГИКА ЗАГРУЗКИ ДАННЫХ ---
+  const fetchGames = async (userId) => {
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games`, {
+        headers: { 'x-user-id': String(userId) }
+      });
+      const data = await res.json();
+      setGames(data);
+      return data; // ВАЖНО: возвращаем данные, чтобы использовать их в цепочке
+    } catch (e) { console.error(e); }
+  };
 
-  // --- 3. ЛОГИКА ЗАПИСИ И ОТПИСКИ ---
-  const handleJoinGame = (gameId) => {
-    setGames(prev => prev.map(g => {
-      if (g.id === gameId && !g.bookedUsers.includes(currentUser.id) && g.players < g.maxPlayers) {
-        const updated = { ...g, players: g.players + 1, bookedUsers: [...g.bookedUsers, currentUser.id] };
-        if (selectedGame?.id === gameId) setSelectedGame(updated);
-        return updated;
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('id');
+    const email = params.get('email');
+    const role = params.get('role');
+
+    if (id && email && role) {
+      const userData = { id: Number(id), email, role };
+      localStorage.setItem('user', JSON.stringify(userData));
+      setCurrentUser(userData);
+      fetchGames(userData.id);
+      setView('list');
+      window.history.replaceState({}, document.title, "/");
+      return;
+    }
+
+    const savedUser = localStorage.getItem('user');
+    if (savedUser) {
+      const parsed = JSON.parse(savedUser);
+      setCurrentUser(parsed);
+      fetchGames(parsed.id);
+      setView('list');
+    } else {
+      setView('login');
+    }
+  }, []);
+
+  // Дополнительный эффект для синхронизации формы с пользователем
+  useEffect(() => {
+    if (currentUser) {
+      setNewGame(prev => ({
+        ...prev,
+        master_name: currentUser.email,
+        date_time: getMoscowDefaultDateTime() // Обновляем дату при загрузке юзера
+      }));
+    }
+  }, [currentUser]); // Сработает сразу, как только currentUser перестанет быть null
+
+
+  // --- 3. ОБРАБОТЧИКИ СОБЫТИЙ ---
+
+//  запись
+const handleJoinGame = async (gameId) => {
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/bookings/join`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json', 
+        'x-user-id': String(currentUser.id) 
+      },
+      body: JSON.stringify({ game_id: gameId })
+    });
+
+    if (res.ok) {
+      // КЛЮЧЕВОЙ МОМЕНТ: ждем обновления общего списка и получаем его
+      const allGames = await fetchGames(currentUser.id);
+      
+      // Находим ЭТУ ЖЕ игру в свежем списке
+      const freshGame = allGames.find(g => g.id === gameId);
+      
+      if (freshGame) {
+        // Обновляем выбранную игру НОВЫМ объектом (смена ссылки заставит React перерисовать экран)
+        setSelectedGame({...freshGame}); 
       }
-      return g;
-    }));
-  };
+    }
+  } catch (e) { console.error(e); }
+};
 
-  const handleLeaveGame = (gameId) => {
-    setGames(prev => prev.map(g => {
-      if (g.id === gameId && g.bookedUsers.includes(currentUser.id)) {
-        const updated = { 
-          ...g, 
-          players: Math.max(0, g.players - 1), 
-          bookedUsers: g.bookedUsers.filter(uid => uid !== currentUser.id) 
-        };
-        if (selectedGame?.id === gameId) setSelectedGame(updated);
-        return updated;
+// отмена записи
+const handleLeaveGame = async (gameId) => {
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/bookings/leave/${gameId}`, {
+      method: 'DELETE',
+      headers: { 'x-user-id': String(currentUser.id) }
+    });
+
+    if (res.ok) {
+      const allGames = await fetchGames(currentUser.id);
+      const freshGame = allGames.find(g => g.id === gameId);
+      if (freshGame) {
+        setSelectedGame({...freshGame}); // Обновляем через деструктуризацию для новой ссылки
       }
-      return g;
-    }));
+    }
+  } catch (e) { console.error(e); }
+};
+
+
+  // Удаление игры
+  const handleDeleteGame = async (gameId) => {
+    if (!window.confirm("Вы уверены, что хотите удалить эту игру?")) return;
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games/${gameId}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': String(currentUser.id) }
+      });
+      if (res.ok) {
+        alert("Игра удалена");
+        setView('list');
+        fetchGames(currentUser.id);
+      } else {
+        const error = await res.json();
+        alert(error.detail || "Ошибка при удалении");
+      }
+    } catch (e) { alert("Ошибка соединения"); }
   };
 
-  const handleSaveGame = (e) => {
+  // Обновление игры (логика похожа на создание, но метод PATCH/PUT)
+  const handleUpdateGame = async (e) => {
     e.preventDefault();
-    const gameToAdd = { ...newGame, id: Date.now(), master: currentUser.name, players: 0, bookedUsers: [] };
-    setGames([gameToAdd, ...games]);
-    setView('list');
-    setNewGame({ title: '', maxPlayers: 4, date: getMoscowDefaultDateTime(), desc: '', image: 'https://images.unsplash.com' });
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games/${editingGame.id}`, {
+        method: 'PATCH',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id) 
+        },
+        // Отправляем ТОЛЬКО те поля, которые есть в GameBase
+        body: JSON.stringify({
+          title: editingGame.title,
+          master_name: editingGame.master_name || currentUser.email, // ВАЖНО: берем из объекта или текущего юзера
+          description: editingGame.description,
+          image_url: editingGame.image_url,
+          max_players: Number(editingGame.max_players),
+          date_time: editingGame.date_time
+        })
+      });
+
+      if (res.ok) {
+        alert("Приключение обновлено!");
+        setEditingGame(null);
+        setView('list');
+        fetchGames(currentUser.id);
+      } else {
+        const errorData = await res.json();
+        alert(`Ошибка: ${errorData.detail}`);
+      }
+    } catch (e) {
+      alert("Не удалось связаться с сервером");
+    }
   };
 
-  const deleteGame = (e, id) => {
-    e.stopPropagation();
-    if (window.confirm("Удалить игру?")) setGames(games.filter(g => g.id !== id));
+
+  const handleLogout = () => {
+    localStorage.removeItem('user');
+    setCurrentUser(null);
+    setView('login');
   };
 
-  const handleAddPrivileged = (e) => {
+
+  const handleSaveGame = async (e) => {
     e.preventDefault();
-    setPrivilegedUsers([...privilegedUsers, { ...newUser, id: Date.now() }]);
-    setNewUser({ name: '', role: ROLES.MASTER });
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-id': String(currentUser.id) 
+        },
+        body: JSON.stringify(newGame)
+      });
+      if (res.ok) {
+        await fetchGames(currentUser.id);
+        setView('list');
+        // Сброс формы с новой датой по умолчанию
+        setNewGame({ 
+          title: '', 
+          max_players: 4,              // Было maxPlayers
+          date_time: getMoscowDefaultDateTime(), // Было date
+          description: '',             // Было desc
+          image_url: 'https://images.unsplash.com', // Было image
+          master_name: currentUser?.email || 'Мастер'
+        });
+      }
+    } catch (e) { alert("Ошибка создания игры"); }
   };
 
-  // --- 4. КОМПОНЕНТЫ ---
+  const handleCleanupOldGames = async () => {
+    if (!window.confirm("Удалить все прошедшие игры?")) return;
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/admin/cleanup-old-games`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': String(currentUser.id) }
+      });
+      if (res.ok) {
+        const result = await res.json();
+        alert(`Удалено игр: ${result.deleted_count}`);
+        fetchGames(currentUser.id);
+      }
+    } catch (e) { alert("Ошибка очистки"); }
+  };
+
+  // --- 4. КОМПОНЕНТЫ ИНТЕРФЕЙСА ---
+  if (view === 'loading') return <div className="p-10 font-bold text-center">Загрузка...</div>;
+
+  if (view === 'login') return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-100 p-6">
+      <div className="bg-white p-12 rounded-[3rem] shadow-2xl text-center max-w-sm w-full relative">
+        <h1 className="text-4xl font-black text-emerald-600 mb-2">DICE & MEETS</h1>
+        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mb-10">Клуб настольных игр</p>
+        
+        {/* Ссылка-кнопка с явными стилями кликабельности */}
+        <a 
+          href={CONFIG.YANDEX_LOGIN_URL} 
+          onClick={(e) => {
+            // Останавливаем "всплытие" события к родительским блокам
+            e.stopPropagation();
+            console.log("Клик по кнопке зафиксирован, переход на:", CONFIG.YANDEX_LOGIN_URL);
+          }}
+          className="relative z-50 inline-block w-full bg-yellow-400 hover:bg-yellow-500 text-black font-black py-5 rounded-2xl transition-all shadow-lg cursor-pointer uppercase tracking-tighter text-sm active:scale-95 text-center"
+        >
+          Войти через Яндекс
+        </a>
+      </div>
+    </div>
+  );
+
   const Header = () => (
     <header className="bg-white border-b border-emerald-100 sticky top-0 z-30 shadow-sm px-6 py-4 flex justify-between items-center text-left">
       <h1 className="text-2xl font-black text-emerald-600 cursor-pointer" onClick={() => setView('list')}>DICE & MEETS</h1>
       <div className="flex items-center gap-6">
-        {isAdmin && <button onClick={() => setView('admin')} className="text-slate-400 hover:text-emerald-600 text-xs font-black uppercase tracking-widest">Персонал</button>}
+        {currentUser?.role === ROLES.ADMIN && (
+          <button onClick={() => setView('admin')} className="text-slate-400 hover:text-emerald-600 text-[10px] font-black uppercase tracking-widest transition-colors">Админка</button>
+        )}
         <div className="text-right border-l pl-4 font-bold">
-          <p className="text-[10px] text-emerald-500 uppercase tracking-tighter leading-none mb-1">{currentUser.role}</p>
-          <p className="text-sm text-slate-800 leading-none">{currentUser.name}</p>
+          <p className="text-[10px] text-emerald-500 uppercase leading-none mb-1">{currentUser?.role}</p>
+          <p className="text-sm text-slate-800 leading-none mb-1">{currentUser?.email}</p>
+          <button onClick={handleLogout} className="text-[9px] text-red-300 hover:text-red-500 uppercase tracking-tighter">Выйти</button>
         </div>
       </div>
     </header>
   );
 
-  // --- ЭКРАН: СПИСОК ---
   if (view === 'list') {
     const filtered = games.filter(g => g.title.toLowerCase().includes(searchTerm.toLowerCase()));
     return (
@@ -126,104 +282,271 @@ export default function App() {
         <main className="max-w-6xl mx-auto px-6 py-10">
           <input type="text" placeholder="Поиск приключений..." className="w-full max-w-md px-6 py-4 rounded-3xl bg-white shadow-sm outline-none mb-10 font-bold border-none focus:ring-2 focus:ring-emerald-500 transition-all" onChange={e => setSearchTerm(e.target.value)} />
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-            {isMasterOrAdmin && (
+            {(currentUser?.role === ROLES.MASTER || currentUser?.role === ROLES.ADMIN) && (
               <div onClick={() => setView('create')} className="border-4 border-dashed border-emerald-100 rounded-[3rem] flex flex-col items-center justify-center p-10 hover:border-emerald-400 hover:bg-emerald-50 transition-all cursor-pointer group h-[340px] text-center">
                 <span className="text-5xl text-emerald-200 group-hover:scale-110 mb-2 transition-transform">+</span>
                 <span className="text-emerald-400 font-black uppercase text-[10px] tracking-widest">Создать игру</span>
               </div>
             )}
-            {filtered.map(game => {
-              const canDel = isAdmin || (currentUser.role === ROLES.MASTER && game.master === currentUser.name);
-              const isBooked = game.bookedUsers.includes(currentUser.id);
-              return (
-                <div key={game.id} onClick={() => { setSelectedGame(game); setView('details'); }} className="bg-white rounded-[3rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-2xl transition-all cursor-pointer h-[340px] flex flex-col relative group">
-                  <img src={game.image} className="h-40 w-full object-cover" />
-                  {canDel && <button onClick={e => deleteGame(e, game.id)} className="absolute top-4 right-4 bg-white/90 p-2 rounded-xl text-red-500 opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all shadow-lg">🗑</button>}
-                  <div className="p-8 flex-1 flex flex-col justify-between">
-                    <h2 className="text-xl font-black text-slate-800 line-clamp-1 group-hover:text-emerald-600 transition-colors">{game.title}</h2>
-                    <div className="flex justify-between items-center pt-4 border-t border-slate-50 font-bold">
-                      <span className="text-[10px] text-emerald-500 uppercase">{new Date(game.date).toLocaleDateString()}</span>
-                      <span className={`px-2 py-1 rounded-lg text-[10px] uppercase font-black tracking-tighter ${isBooked ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                         {isBooked ? 'Записан' : `${game.players}/${game.maxPlayers} мест`}
-                      </span>
-                    </div>
+            {filtered.map(game => (
+              <div key={game.id} onClick={() => { setSelectedGame(game); setView('details'); }} className="bg-white rounded-[3rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-2xl transition-all cursor-pointer h-[340px] flex flex-col relative group">
+                <img src={game.image_url} className="h-40 w-full object-cover" alt="" />
+                <div className="p-8 flex-1 flex flex-col justify-between">
+                  <h2 className="text-xl font-black text-slate-800 line-clamp-1 group-hover:text-emerald-600 transition-colors">{game.title}</h2>
+                  <div className="flex justify-between items-center pt-4 border-t border-slate-50 font-bold">
+                    <span className="text-[10px] text-emerald-500 uppercase">{new Date(game.date_time).toLocaleDateString()}</span>
+                    <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded-lg text-[10px] uppercase font-black tracking-tighter">
+                      {game.current_players}/{game.max_players} мест
+                    </span>
                   </div>
                 </div>
-              )
-            })}
+              </div>
+            ))}
           </div>
         </main>
       </div>
     );
   }
 
-  // --- ЭКРАН: СОЗДАНИЕ ---
-  if (view === 'create') {
-    return (
-      <div className="min-h-screen bg-slate-50 text-left">
-        <Header />
-        <main className="max-w-2xl mx-auto px-6 py-10">
-          <button onClick={() => setView('list')} className="text-slate-400 font-black text-[10px] uppercase mb-6 tracking-widest hover:text-emerald-600 transition-colors">← Отмена</button>
-          <form onSubmit={handleSaveGame} className="bg-white p-10 rounded-[3rem] shadow-2xl space-y-6">
-            <h2 className="text-3xl font-black text-slate-800 leading-none">Новая игра</h2>
-            <div className="space-y-4">
-              <input required type="text" placeholder="Название" className="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500 border-none font-bold" value={newGame.title} onChange={e => setNewGame({...newGame, title: e.target.value})} />
-              <input required type="url" placeholder="URL картинки" className="w-full p-4 bg-slate-50 rounded-2xl outline-none text-xs font-mono border-none" value={newGame.image} onChange={e => setNewGame({...newGame, image: e.target.value})} />
-              <div className="grid grid-cols-2 gap-4">
-                <input required type="datetime-local" className="p-4 bg-slate-50 rounded-2xl outline-none font-bold border-none" value={newGame.date} onChange={e => setNewGame({...newGame, date: e.target.value})} />
-                <input required type="number" placeholder="Мест" className="p-4 bg-slate-50 rounded-2xl outline-none font-bold border-none" value={newGame.maxPlayers} onChange={e => setNewGame({...newGame, maxPlayers: e.target.value})} />
-              </div>
-              <textarea required rows="4" placeholder="Описание" className="w-full p-4 bg-slate-50 rounded-2xl outline-none resize-none font-medium border-none" value={newGame.desc} onChange={e => setNewGame({...newGame, desc: e.target.value})}></textarea>
+  if (view === 'admin') return (
+    <div className="min-h-screen bg-slate-50 text-left">
+      <Header />
+      <main className="max-w-4xl mx-auto px-6 py-10">
+        <button onClick={() => setView('list')} className="text-emerald-600 font-black text-[10px] uppercase mb-6 tracking-widest">← Назад</button>
+        <div className="bg-white p-12 rounded-[3rem] shadow-sm border border-slate-100">
+          <h2 className="text-3xl font-black text-slate-800 mb-4">Панель управления</h2>
+          <p className="text-slate-400 font-medium mb-10">Обслуживание системы и базы данных приключений.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="p-8 bg-red-50 rounded-[2rem] border border-red-100">
+              <h3 className="font-black text-red-600 uppercase text-xs tracking-widest mb-2">Очистка данных</h3>
+              <p className="text-sm text-red-400 mb-6 font-bold">Удалить все завершенные игры, дата которых меньше текущей.</p>
+              <button onClick={handleCleanupOldGames} className="w-full bg-red-500 hover:bg-red-600 text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-red-100 uppercase text-[10px] tracking-widest">
+                Запустить очистку
+              </button>
             </div>
-            <button type="submit" className="w-full bg-emerald-500 text-white font-black py-5 rounded-2xl uppercase tracking-widest shadow-lg hover:bg-emerald-600 transition-all">Опубликовать</button>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+
+  if (view === 'create') return (
+    <div className="min-h-screen bg-slate-50 text-left">
+      <Header />
+      <main className="max-w-2xl mx-auto px-6 py-10">
+        <button onClick={() => setView('list')} className="text-slate-400 font-black text-[10px] uppercase mb-6 tracking-widest hover:text-emerald-600 transition-colors">← Отмена</button>
+        <form onSubmit={handleSaveGame} className="bg-white p-10 rounded-[3rem] shadow-2xl space-y-6">
+          <h2 className="text-3xl font-black text-slate-800 leading-none">Новая игра</h2>
+          <div className="space-y-4">
+            <input required type="text" placeholder="Название" className="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500 border-none font-bold" value={newGame.title} onChange={e => setNewGame({...newGame, title: e.target.value})} />
+            <input required type="url" placeholder="URL картинки" className="w-full p-4 bg-slate-50 rounded-2xl outline-none text-xs font-mono border-none" value={newGame.image_url} onChange={e => setNewGame({...newGame, image_url: e.target.value})} />
+            <div className="grid grid-cols-2 gap-4">
+              <input required type="datetime-local" className="p-4 bg-slate-50 rounded-2xl outline-none font-bold border-none" value={newGame.date_time} onChange={e => setNewGame({...newGame, date_time: e.target.value})} />
+              <input required type="number" placeholder="Мест" className="p-4 bg-slate-50 rounded-2xl outline-none font-bold border-none" value={newGame.max_players} onChange={e => setNewGame({...newGame, max_players: Number(e.target.value)})} />
+            </div>
+            <textarea required rows="4" placeholder="Описание" className="w-full p-4 bg-slate-50 rounded-2xl outline-none resize-none font-medium border-none" value={newGame.description} onChange={e => setNewGame({...newGame, description: e.target.value})}></textarea>
+          </div>
+          <button type="submit" className="w-full bg-emerald-500 text-white font-black py-5 rounded-2xl uppercase tracking-widest shadow-lg hover:bg-emerald-600 transition-all">Опубликовать</button>
+        </form>
+      </main>
+    </div>
+  );
+
+  if (view === 'edit' && editingGame) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-left flex flex-col">
+        <Header />
+        <main className="max-w-2xl mx-auto px-6 py-10 w-full">
+          {/* Кнопка отмены */}
+          <button 
+            onClick={() => { setEditingGame(null); setView('details'); }} 
+            className="text-slate-400 font-black text-[10px] uppercase mb-6 tracking-widest hover:text-emerald-600 transition-colors"
+          >
+            ← Отменить редактирование
+          </button>
+
+          <form 
+            onSubmit={handleUpdateGame} 
+            className="bg-white p-8 md:p-12 rounded-[3rem] shadow-2xl space-y-6 border border-slate-100"
+          >
+            <div className="space-y-2">
+              <h2 className="text-3xl font-black text-slate-800">Редактирование</h2>
+              <p className="text-slate-400 text-xs uppercase font-bold tracking-tighter">ID игры: {editingGame.id}</p>
+            </div>
+
+            <div className="space-y-4">
+              {/* Название игры */}
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-4 mb-1 block">Название приключения</label>
+                <input 
+                  required type="text" 
+                  className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-slate-700 border-2 border-transparent focus:border-emerald-100 outline-none transition-all" 
+                  value={editingGame.title} 
+                  onChange={e => setEditingGame({...editingGame, title: e.target.value})} 
+                />
+              </div>
+              
+              {/* Ссылка на картинку */}
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-4 mb-1 block">URL обложки (картинка)</label>
+                <input 
+                  required type="url" 
+                  className="w-full p-4 bg-slate-50 rounded-2xl font-medium text-slate-600 border-2 border-transparent focus:border-emerald-100 outline-none transition-all" 
+                  value={editingGame.image_url} 
+                  onChange={e => setEditingGame({...editingGame, image_url: e.target.value})} 
+                />
+              </div>
+
+              {/* Дата и Количество игроков в одну строку */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-4 mb-1 block">Дата и время (МСК)</label>
+                  <input 
+                    required type="datetime-local" 
+                    className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-slate-700 border-2 border-transparent focus:border-emerald-100 outline-none transition-all" 
+                    value={editingGame.date_time} 
+                    onChange={e => setEditingGame({...editingGame, date_time: e.target.value})} 
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-400 ml-4 mb-1 block">Макс. игроков</label>
+                  <input 
+                    required type="number" min="1" max="20"
+                    className="w-full p-4 bg-slate-50 rounded-2xl font-bold text-slate-700 border-2 border-transparent focus:border-emerald-100 outline-none transition-all" 
+                    value={editingGame.max_players} 
+                    onChange={e => setEditingGame({...editingGame, max_players: Number(e.target.value)})} 
+                  />
+                </div>
+              </div>
+
+              {/* Описание */}
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-4 mb-1 block">Описание приключения</label>
+                <textarea 
+                  required rows="5" 
+                  className="w-full p-4 bg-slate-50 rounded-2xl font-medium text-slate-600 border-2 border-transparent focus:border-emerald-100 outline-none transition-all resize-none" 
+                  value={editingGame.description} 
+                  onChange={e => setEditingGame({...editingGame, description: e.target.value})}
+                ></textarea>
+              </div>
+            </div>
+
+            <div className="pt-4 flex flex-col gap-3">
+              <button 
+                type="submit" 
+                className="w-full bg-emerald-500 text-white font-black py-5 rounded-2xl uppercase tracking-widest shadow-lg shadow-emerald-100 hover:bg-emerald-600 hover:-translate-y-0.5 transition-all"
+              >
+                Сохранить изменения
+              </button>
+              <button 
+                type="button"
+                onClick={() => { setEditingGame(null); setView('details'); }}
+                className="w-full bg-slate-100 text-slate-500 font-black py-4 rounded-2xl uppercase tracking-widest text-[10px] hover:bg-slate-200 transition-all"
+              >
+                Назад без сохранения
+              </button>
+            </div>
           </form>
         </main>
       </div>
     );
   }
 
-  // --- ЭКРАН: ДЕТАЛИ ---
   if (view === 'details' && selectedGame) {
-    const isBooked = selectedGame.bookedUsers.includes(currentUser.id);
-    const isFull = selectedGame.players >= selectedGame.maxPlayers;
+    // 1. Сначала объявляем все расчетные переменные
+    const isFull = selectedGame.current_players >= selectedGame.max_players;
+    
+    // Проверяем, записан ли текущий пользователь
+    const isJoined = selectedGame.booked_users?.some(u => u.id === currentUser.id);
+
+    // Проверка прав (админ или мастер игры)
+    const canManage = currentUser.role === 'администратор' || 
+                    (currentUser.role === 'мастер' && selectedGame.master_name === currentUser.email);
+
+    // 2. Только после этого возвращаем JSX
     return (
       <div className="min-h-screen bg-slate-50 text-left">
         <Header />
-        <main className="max-w-4xl mx-auto px-6 py-10">
-          <button onClick={() => setView('list')} className="text-emerald-600 font-black text-[10px] uppercase mb-6 tracking-widest">← Назад к списку</button>
-          <div className="bg-white rounded-[4rem] shadow-2xl overflow-hidden flex flex-col md:flex-row border border-emerald-50">
-            <img src={selectedGame.image} className="md:w-1/2 h-80 md:h-auto object-cover" />
-            <div className="p-12 md:w-1/2 flex flex-col justify-center">
-              <h1 className="text-4xl font-black text-slate-800 leading-tight mb-2">{selectedGame.title}</h1>
-              <p className="text-emerald-600 font-bold mb-6 italic tracking-tight">Ведущий: {selectedGame.master}</p>
-              <div className="text-slate-500 text-sm mb-10 leading-relaxed font-medium whitespace-pre-line border-l-4 border-emerald-50 pl-4">{selectedGame.desc}</div>
-              
-              <div className="space-y-3">
-                {!isBooked ? (
+        <main className="max-w-5xl mx-auto px-6 py-10">
+          <button 
+            onClick={() => setView('list')} 
+            className="text-emerald-600 font-black text-[10px] uppercase mb-6 tracking-widest hover:opacity-70 transition-all"
+          >
+            ← Назад к списку
+          </button>
+
+          <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden flex flex-col md:flex-row border border-emerald-50">
+            {/* Изображение */}
+            <div className="md:w-1/2 relative h-80 md:h-auto">
+              <img src={selectedGame.image_url} className="w-full h-full object-cover" alt={selectedGame.title} />
+            </div>
+
+            {/* Контент */}
+            <div className="p-8 md:p-12 md:w-1/2 flex flex-col">
+              <div className="mb-8">
+                <h1 className="text-4xl font-black text-slate-800 leading-tight mb-2">{selectedGame.title}</h1>
+                <p className="text-emerald-600 font-bold mb-6 italic">Ведущий: {selectedGame.master_name}</p>
+                
+                <div className="text-slate-500 text-sm mb-8 leading-relaxed border-l-4 border-emerald-100 pl-6 whitespace-pre-line">
+                  {selectedGame.description}
+                </div>
+
+                {/* Список участников */}
+                <div className="mb-8 bg-slate-50 p-6 rounded-3xl">
+                  <h3 className="text-[10px] font-black uppercase text-slate-400 mb-4 tracking-widest">
+                    Участники ({selectedGame.current_players}/{selectedGame.max_players})
+                  </h3>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedGame.booked_users && selectedGame.booked_users.length > 0 ? (
+                      selectedGame.booked_users.map((user, idx) => (
+                        <span key={idx} className="bg-white px-3 py-1.5 rounded-full text-xs font-bold text-slate-600 border border-slate-100 shadow-sm">
+                          {user.email.split('@')[0]}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-xs text-slate-400 italic">Пока никто не записался...</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Блок управления (Редактировать/Удалить) — теперь canManage определен выше */}
+              {canManage && (
+                <div className="flex gap-3 mb-6">
+                  <button 
+                    onClick={() => { setEditingGame(selectedGame); setView('edit'); }} 
+                    className="flex-1 bg-amber-100 text-amber-700 font-black py-3 rounded-xl uppercase text-[10px] hover:bg-amber-200 transition-all"
+                  >
+                    Редактировать
+                  </button>
+                  <button 
+                    onClick={() => handleDeleteGame(selectedGame.id)} 
+                    className="flex-1 bg-red-100 text-red-600 font-black py-3 rounded-xl uppercase text-[10px] hover:bg-red-200 transition-all"
+                  >
+                    Удалить
+                  </button>
+                </div>
+              )}
+
+              {/* Кнопка записи */}
+              <div className="space-y-4">
+                {isJoined ? (
+                  <button 
+                    onClick={() => handleLeaveGame(selectedGame.id)} 
+                    className="w-full bg-red-50 text-red-500 font-black py-5 rounded-2xl uppercase tracking-widest border-2 border-red-100 hover:bg-red-100 transition-all"
+                  >
+                    Отписаться от приключения
+                  </button>
+                ) : (
                   <button 
                     disabled={isFull} 
                     onClick={() => handleJoinGame(selectedGame.id)} 
-                    className={`w-full font-black py-5 rounded-2xl transition-all shadow-xl ${isFull ? 'bg-red-50 text-red-400 cursor-not-allowed' : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-100'}`}
+                    className={`w-full font-black py-5 rounded-2xl uppercase tracking-widest shadow-xl transition-all ${isFull ? 'bg-slate-200 text-slate-400' : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-100'}`}
                   >
                     {isFull ? 'МЕСТ НЕТ' : 'ЗАПИСАТЬСЯ НА ПРИКЛЮЧЕНИЕ'}
                   </button>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="w-full bg-emerald-50 text-emerald-600 font-black py-4 rounded-2xl text-center text-sm border-2 border-emerald-100">
-                      ✓ ВЫ ЗАПИСАНЫ
-                    </div>
-                    <button 
-                      onClick={() => handleLeaveGame(selectedGame.id)}
-                      className="w-full text-red-400 font-bold py-2 text-xs uppercase tracking-widest hover:text-red-600 transition-colors"
-                    >
-                      Отменить запись
-                    </button>
-                  </div>
                 )}
               </div>
-              <p className="mt-6 text-[10px] text-center font-black text-slate-300 uppercase tracking-widest">
-                Свободно {selectedGame.maxPlayers - selectedGame.players} из {selectedGame.maxPlayers} мест
-              </p>
             </div>
           </div>
         </main>
@@ -231,40 +554,5 @@ export default function App() {
     );
   }
 
-  // --- ЭКРАН: АДМИНКА ---
-  if (view === 'admin') {
-    return (
-      <div className="min-h-screen bg-slate-50 text-left">
-        <Header />
-        <main className="max-w-4xl mx-auto px-6 py-10 grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div className="bg-white p-8 rounded-[2.5rem] shadow-sm h-fit border border-slate-100">
-            <h3 className="font-black mb-6 text-slate-800 tracking-tight">Добавить роль</h3>
-            <form onSubmit={handleAddPrivileged} className="space-y-4">
-              <input required type="text" placeholder="Имя" className="w-full p-3 bg-slate-50 rounded-xl outline-none font-bold text-sm border-none focus:ring-2 focus:ring-emerald-500" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} />
-              <select className="w-full p-3 bg-slate-50 rounded-xl font-bold text-xs border-none cursor-pointer" value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})}>
-                <option value={ROLES.MASTER}>Мастер</option>
-                <option value={ROLES.ADMIN}>Админ</option>
-              </select>
-              <button type="submit" className="w-full bg-emerald-600 text-white font-black py-3 rounded-xl uppercase text-[10px] tracking-widest hover:bg-emerald-700 transition-all">Добавить в список</button>
-            </form>
-          </div>
-          <div className="md:col-span-2 bg-white p-10 rounded-[2.5rem] shadow-sm border border-slate-100">
-            <h2 className="text-2xl font-black mb-8 text-slate-800 tracking-tight">Персонал системы</h2>
-            <div className="space-y-3">
-              {privilegedUsers.map(u => (
-                <div key={u.id} className="flex justify-between items-center p-5 bg-slate-50 rounded-2xl border border-slate-50">
-                  <div className="flex flex-col">
-                    <span className="font-black text-slate-700 leading-none mb-1">{u.name}</span>
-                    <span className="text-[9px] text-emerald-500 uppercase font-black italic tracking-widest">{u.role}</span>
-                  </div>
-                  <button onClick={() => setPrivilegedUsers(privilegedUsers.filter(x => x.id !== u.id))} className="text-red-300 hover:text-red-500 font-black text-xs px-2 transition-colors">✕</button>
-                </div>
-              ))}
-              {privilegedUsers.length === 0 && <p className="text-slate-300 text-center py-10 font-bold italic">Список пуст</p>}
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  return null;
 }
