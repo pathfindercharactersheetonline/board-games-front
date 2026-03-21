@@ -31,15 +31,33 @@ export default function App() {
   });
 
   // --- 2. ЛОГИКА ЗАГРУЗКИ ДАННЫХ ---
-  const fetchGames = async (userId) => {
+  const fetchGames = async (userId, sharedGameId = null) => {
     try {
       const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games`, {
         headers: { 'x-user-id': String(userId) }
       });
+      if (!res.ok) throw new Error('Ошибка сети');
       const data = await res.json();
       setGames(data);
-      return data; // ВАЖНО: возвращаем данные, чтобы использовать их в цепочке
-    } catch (e) { console.error(e); }
+
+      // Ищем игру строго по ID, если он пришел из URL
+      const targetGame = sharedGameId ? data.find(g => g.id === Number(sharedGameId)) : null;
+
+      if (targetGame) {
+        setSelectedGame(targetGame);
+        setView('details'); // Один раз устанавливаем детали
+      } else {
+        setView('list');    // Или один раз список
+      }
+
+      if (window.location.search) {
+        window.history.replaceState({}, document.title, "/");
+      }
+      
+    } catch (e) {
+      console.error("Ошибка загрузки:", e);
+      setView('login');
+    }
   };
 
   useEffect(() => {
@@ -47,27 +65,34 @@ export default function App() {
     const id = params.get('id');
     const email = params.get('email');
     const role = params.get('role');
+    const provider = params.get('provider');
+    const sharedGameId = params.get('gameId'); // Хватаем ID игры сразу
 
+    let userToAuth = null;
+
+    // 1. Логика авторизации
     if (id && email && role) {
-      const userData = { id: Number(id), email, role };
-      localStorage.setItem('user', JSON.stringify(userData));
-      setCurrentUser(userData);
-      fetchGames(userData.id);
-      setView('list');
-      window.history.replaceState({}, document.title, "/");
-      return;
+      userToAuth = { id: Number(id), email, role, provider: provider || 'yandex' };
+      localStorage.setItem('user', JSON.stringify(userToAuth));
+      setCurrentUser(userToAuth);
+    } else {
+      const saved = localStorage.getItem('user');
+      if (saved) {
+        userToAuth = JSON.parse(saved);
+        setCurrentUser(userToAuth);
+      }
     }
 
-    const savedUser = localStorage.getItem('user');
-    if (savedUser) {
-      const parsed = JSON.parse(savedUser);
-      setCurrentUser(parsed);
-      fetchGames(parsed.id);
-      setView('list');
+    // 2. Логика перехода на экран
+    if (userToAuth) {
+      // Загружаем игры и передаем ID из ссылки. 
+      // fetchGames САМА вызовет setView('details') или setView('list')
+      fetchGames(userToAuth.id, sharedGameId);
     } else {
       setView('login');
     }
-  }, []);
+  }, []); // Пустой массив зависимостей — сработает строго 1 раз при старте
+
 
   // Дополнительный эффект для синхронизации формы с пользователем
   useEffect(() => {
@@ -231,6 +256,17 @@ const handleLeaveGame = async (gameId) => {
         fetchGames(currentUser.id);
       }
     } catch (e) { alert("Ошибка очистки"); }
+  };
+
+  const handleShare = (gameId) => {
+    // Формируем ссылку: текущий адрес + параметр gameId
+    const shareUrl = `${window.location.origin}?gameId=${gameId}`;
+    
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      alert("Ссылка скопирована в буфер обмена!");
+    }).catch(err => {
+      console.error("Ошибка копирования:", err);
+    });
   };
 
   // --- 4. КОМПОНЕНТЫ ИНТЕРФЕЙСА ---
@@ -474,7 +510,6 @@ const handleLeaveGame = async (gameId) => {
           >
             ← Назад к списку
           </button>
-
           <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden flex flex-col md:flex-row border border-emerald-50">
             {/* Изображение */}
             <div className="md:w-1/2 relative h-80 md:h-auto">
@@ -484,10 +519,23 @@ const handleLeaveGame = async (gameId) => {
             {/* Контент */}
             <div className="p-8 md:p-12 md:w-1/2 flex flex-col">
               <div className="mb-8">
-                <h1 className="text-4xl font-black text-slate-800 leading-tight mb-2">{selectedGame.title}</h1>
-                <p className="text-emerald-600 font-bold mb-6 italic">Ведущий: {selectedGame.master_name}</p>
-                
-                <div className="text-slate-500 text-sm mb-8 leading-relaxed border-l-4 border-emerald-100 pl-6 whitespace-pre-line">
+                <h1 className="text-4xl font-black text-slate-800 leading-tight mb-2 wrap-break-word">
+                  {selectedGame.title}
+                </h1>
+                <div className="flex items-center gap-4 mb-6">
+                  <p className="text-emerald-600 font-bold italic break-all">
+                    Ведущий: {selectedGame.master_name}
+                  </p>
+                  
+                  <button 
+                    onClick={() => handleShare(selectedGame.id)}
+                    className="flex items-center gap-1.5 bg-emerald-50 px-3 py-1 rounded-full text-emerald-700 font-black text-[9px] uppercase tracking-tighter border border-emerald-100 hover:bg-emerald-100 transition-all shadow-sm"
+                    title="Копировать ссылку на игру"
+                  >
+                    <span>Поделиться</span>
+                  </button>
+                </div>
+                <div className="text-slate-500 text-sm mb-8 leading-relaxed border-l-4 border-emerald-100 pl-6 whitespace-pre-line wrap-break-word">
                   {selectedGame.description}
                 </div>
 
