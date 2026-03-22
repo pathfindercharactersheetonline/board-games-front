@@ -29,69 +29,167 @@ export default function App() {
     image_url: 'https://images.unsplash.com', // Было image
     master_name: currentUser?.email || 'Мастер' // НОВОЕ ОБЯЗАТЕЛЬНОЕ ПОЛЕ
   });
+  const [users, setUsers] = useState([]);
+  const [cleanupDays, setCleanupDays] = useState(30); // По умолчанию 30 дней, как на бэкенде
+  const [currentPage, setCurrentPage] = useState(0);
+  const GAMES_PER_PAGE = 10; 
+  const isInitialMount = React.useRef(true);
+  const pendingOpening = React.useRef(false); // Флаг: "Мы сейчас открываем игру по ссылке"
+
+
+  // Вызывай это, когда view === 'admin'
+  const fetchUsers = async (search = "") => {
+      try {
+          // Формируем URL с параметром поиска
+          let url = `${CONFIG.API_BASE_URL}/api/v1/admin/users`;
+          if (search) {
+              url += `?search=${encodeURIComponent(search)}`;
+          }
+
+          const response = await fetch(url, {
+              headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+          });
+          
+          if (response.ok) {
+              const data = await response.json();
+              setUsers(data);
+          }
+      } catch (err) {
+          console.error("Ошибка загрузки пользователей:", err);
+      }
+  };
+
+  const parseJwt = (token) => {
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+
+      return JSON.parse(jsonPayload);
+    } catch (e) {
+      return null;
+    }
+  };
 
   // --- 2. ЛОГИКА ЗАГРУЗКИ ДАННЫХ ---
-  const fetchGames = async (userId, sharedGameId = null) => {
+  const fetchGames = async (userId, sharedGameId = null, skip = 0, search = "", explicitToken = null) => {
+    const LIMIT = 10;
+    
+    // 2. Используй либо переданный токен, либо из хранилища
+    const token = explicitToken || localStorage.getItem('token');
+
     try {
-      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games`, {
-        headers: { 'x-user-id': String(userId) }
+      // 2. Формируем URL с параметром search
+      let url = `${CONFIG.API_BASE_URL}/api/v1/games?skip=${skip}&limit=${LIMIT}`;
+      if (search) {
+        url += `&search=${encodeURIComponent(search)}`;
+      }
+
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
+      
       if (!res.ok) throw new Error('Ошибка сети');
       const data = await res.json();
       setGames(data);
 
-      // Ищем игру строго по ID, если он пришел из URL
-      const targetGame = sharedGameId ? data.find(g => g.id === Number(sharedGameId)) : null;
+      console.log("Пытаюсь открыть игру по ссылке:", sharedGameId);
 
-      if (targetGame) {
-        setSelectedGame(targetGame);
-        setView('details'); // Один раз устанавливаем детали
-      } else {
-        setView('list');    // Или один раз список
+      if (sharedGameId) {
+        const targetGame = data.find(g => g.id === Number(sharedGameId));
+        
+        if (targetGame) {
+          setSelectedGame(targetGame);
+          setView('details');
+          pendingOpening.current = false; // Игра открыта, флаг можно снять (но позже)
+        } else {
+          try {
+            const detailRes = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games/${sharedGameId}`, {
+              headers: { 
+                'Authorization': `Bearer ${explicitToken || localStorage.getItem('token')}` 
+              }
+            });
+            if (detailRes.ok) {
+              const sharedGameData = await detailRes.json();
+              setSelectedGame(sharedGameData);
+              setView('details');
+            } else {
+              setView('list');
+            }
+          } catch (e) { setView('list'); }
+        }
+      } else if (!sharedGameId) {
+        // Если мы сейчас НЕ в процессе "особого открытия" игры по ссылке
+        if (!pendingOpening.current) {
+            setView('list');
+        }
       }
-
-      if (window.location.search) {
-        window.history.replaceState({}, document.title, "/");
-      }
-      
+      return data; 
     } catch (e) {
       console.error("Ошибка загрузки:", e);
-      setView('login');
     }
   };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const id = params.get('id');
-    const email = params.get('email');
-    const role = params.get('role');
-    const provider = params.get('provider');
-    const sharedGameId = params.get('gameId'); // Хватаем ID игры сразу
+    const tokenFromUrl = params.get('token');
+    
+    // КЛЮЧЕВОЕ: Сначала читаем ID из URL, если его нет — из памяти
+    const urlGameId = params.get('gameId');
+    const pendingGameId = localStorage.getItem('pendingGameId');
+    const sharedGameId = urlGameId || pendingGameId;
 
+    let activeToken = tokenFromUrl || localStorage.getItem('token');
     let userToAuth = null;
 
-    // 1. Логика авторизации
-    if (id && email && role) {
-      userToAuth = { id: Number(id), email, role, provider: provider || 'yandex' };
-      localStorage.setItem('user', JSON.stringify(userToAuth));
-      setCurrentUser(userToAuth);
-    } else {
-      const saved = localStorage.getItem('user');
-      if (saved) {
-        userToAuth = JSON.parse(saved);
+    if (activeToken) {
+      const decoded = parseJwt(activeToken);
+      if (decoded) {
+        userToAuth = { 
+          id: Number(decoded.sub), 
+          email: decoded.email, 
+          role: decoded.role, 
+          provider: 'yandex' 
+        };
+        
+        if (tokenFromUrl) {
+          localStorage.setItem('token', tokenFromUrl);
+          localStorage.setItem('user', JSON.stringify(userToAuth));
+        }
         setCurrentUser(userToAuth);
+        // Если авторизованы и открываем игру — чистим "отложенную" запись
+        if (sharedGameId) localStorage.removeItem('pendingGameId');
       }
     }
 
-    // 2. Логика перехода на экран
     if (userToAuth) {
-      // Загружаем игры и передаем ID из ссылки. 
-      // fetchGames САМА вызовет setView('details') или setView('list')
-      fetchGames(userToAuth.id, sharedGameId);
+      // КЛЮЧЕВОЙ МОМЕНТ:
+      // Если это второй вызов (urlGameId уже null из-за очистки), 
+      // но в первом вызове мы уже запустили открытие игры (pendingOpening.current === true),
+      // то мы ПРОСТО ИГНОРИРУЕМ этот второй вызов.
+      if (!urlGameId && pendingOpening.current) {
+        return; 
+      }
+
+      if (sharedGameId) {
+        pendingOpening.current = true; // Ставим блокировку
+      }
+      fetchGames(userToAuth.id, sharedGameId, 0, "", activeToken);
     } else {
-      setView('login');
+      // Если не залогинены, но есть ID в URL — запоминаем его
+      if (urlGameId) {
+        localStorage.setItem('pendingGameId', urlGameId);
+        setView('login');
+      }
     }
-  }, []); // Пустой массив зависимостей — сработает строго 1 раз при старте
+
+    // Очистка URL — теперь она не удалит sharedGameId из памяти этой функции
+    if (window.location.search) {
+      window.history.replaceState({}, document.title, "/");
+    }
+  }, []); // Строго один раз
 
 
   // Дополнительный эффект для синхронизации формы с пользователем
@@ -105,54 +203,72 @@ export default function App() {
     }
   }, [currentUser]); // Сработает сразу, как только currentUser перестанет быть null
 
+  // Эффект для автоматической загрузки при переходе в админку
+  useEffect(() => {
+    if (view === 'admin') {
+      fetchUsers();
+    }
+  }, [view]); // Сработает каждый раз, когда меняется view
 
   // --- 3. ОБРАБОТЧИКИ СОБЫТИЙ ---
 
-//  запись
-const handleJoinGame = async (gameId) => {
-  try {
-    const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/bookings/join`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json', 
-        'x-user-id': String(currentUser.id) 
-      },
-      body: JSON.stringify({ game_id: gameId })
-    });
+  //  запись
+  const handleJoinGame = async (gameId) => {
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/bookings/join`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json', 
+          'Authorization': `Bearer ${localStorage.getItem('token')}` 
+        },
+        body: JSON.stringify({ game_id: gameId })
+      });
 
-    if (res.ok) {
-      // КЛЮЧЕВОЙ МОМЕНТ: ждем обновления общего списка и получаем его
-      const allGames = await fetchGames(currentUser.id);
-      
-      // Находим ЭТУ ЖЕ игру в свежем списке
-      const freshGame = allGames.find(g => g.id === gameId);
-      
-      if (freshGame) {
-        // Обновляем выбранную игру НОВЫМ объектом (смена ссылки заставит React перерисовать экран)
-        setSelectedGame({...freshGame}); 
+      if (res.ok) {
+        // 1. Сначала просто обновляем данные через API
+        // Если бэкенд возвращает обновленный объект игры в ответе — это лучший вариант:
+        const updatedGameFromApi = await res.json();
+        
+        // 2. Обновляем основной список игр (чтобы на главной изменились счетчики)
+        await fetchGames(currentUser.id);
+        
+        // 3. Обновляем состояние выбранной игры
+        // Используем данные напрямую из ответа (updatedGameFromApi) 
+        // или ищем в актуальном стейте games через callback, чтобы избежать undefined
+        setSelectedGame(updatedGameFromApi);
       }
+    } catch (e) { 
+      console.error("Ошибка при записи на игру:", e); 
     }
-  } catch (e) { console.error(e); }
-};
+  };
 
-// отмена записи
-const handleLeaveGame = async (gameId) => {
-  try {
-    const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/bookings/leave/${gameId}`, {
-      method: 'DELETE',
-      headers: { 'x-user-id': String(currentUser.id) }
-    });
+  // отмена записи
+  const handleLeaveGame = async (gameId) => {
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/bookings/leave/${gameId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
 
-    if (res.ok) {
-      const allGames = await fetchGames(currentUser.id);
-      const freshGame = allGames.find(g => g.id === gameId);
-      if (freshGame) {
-        setSelectedGame({...freshGame}); // Обновляем через деструктуризацию для новой ссылки
+      if (res.ok) {
+        await fetchGames(currentUser.id);
+        
+        // ДОБАВЛЯЕМ ЗАГОЛОВОК СЮДА:
+        const detailRes = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games/${gameId}`, {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        
+        if (detailRes.ok) {
+          const freshGame = await detailRes.json();
+          setSelectedGame(freshGame);
+        } else {
+          setSelectedGame(null);
+        }
       }
+    } catch (e) { 
+      console.error("Ошибка при выходе из игры:", e); 
     }
-  } catch (e) { console.error(e); }
-};
-
+  };
 
   // Удаление игры
   const handleDeleteGame = async (gameId) => {
@@ -160,7 +276,7 @@ const handleLeaveGame = async (gameId) => {
     try {
       const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games/${gameId}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': String(currentUser.id) }
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       if (res.ok) {
         alert("Игра удалена");
@@ -181,7 +297,7 @@ const handleLeaveGame = async (gameId) => {
         method: 'PATCH',
         headers: { 
           'Content-Type': 'application/json',
-          'x-user-id': String(currentUser.id) 
+          'Authorization': `Bearer ${localStorage.getItem('token')}` 
         },
         // Отправляем ТОЛЬКО те поля, которые есть в GameBase
         body: JSON.stringify({
@@ -211,10 +327,31 @@ const handleLeaveGame = async (gameId) => {
 
   const handleLogout = () => {
     localStorage.removeItem('user');
+    localStorage.removeItem('token');
     setCurrentUser(null);
     setView('login');
   };
 
+  const handleRoleChange = async (userId, newRole) => {
+    try {
+      // Добавляем ?new_role=... в конец URL
+      const response = await fetch(`${CONFIG.API_BASE_URL}/api/v1/admin/users/${userId}/role?new_role=${encodeURIComponent(newRole)}`, {
+        method: 'PATCH',
+        headers: { 
+          'Authorization': `Bearer ${localStorage.getItem('token')}` 
+        }
+      });
+
+      if (response.ok) {
+        setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u));
+      } else {
+        const errorData = await response.json();
+        console.error("Детали ошибки 422:", errorData.detail); // Это покажет, что именно не так
+      }
+    } catch (err) {
+      console.error("Ошибка сети:", err);
+    }
+  };
 
   const handleSaveGame = async (e) => {
     e.preventDefault();
@@ -223,7 +360,7 @@ const handleLeaveGame = async (gameId) => {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'x-user-id': String(currentUser.id) 
+          'Authorization': `Bearer ${localStorage.getItem('token')}` 
         },
         body: JSON.stringify(newGame)
       });
@@ -244,19 +381,29 @@ const handleLeaveGame = async (gameId) => {
   };
 
   const handleCleanupOldGames = async () => {
-    if (!window.confirm("Удалить все прошедшие игры?")) return;
+    if (!window.confirm(`Удалить все игры старше ${cleanupDays} дн.?`)) return;
+    
     try {
-      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/admin/cleanup-old-games`, {
+      // Добавляем параметр days в URL
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/admin/cleanup-old-games?days=${cleanupDays}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': String(currentUser.id) }
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
+      
       if (res.ok) {
         const result = await res.json();
         alert(`Удалено игр: ${result.deleted_count}`);
-        fetchGames(currentUser.id);
+        fetchGames(currentUser.id); // Обновляем список игр на главной
+      } else {
+        const err = await res.json();
+        alert(`Ошибка: ${err.detail || 'Не удалось выполнить очистку'}`);
       }
-    } catch (e) { alert("Ошибка очистки"); }
+    } catch (e) { 
+      console.error(e);
+      alert("Ошибка сети при очистке"); 
+    }
   };
+
 
   const handleShare = (gameId) => {
     // Формируем ссылку: текущий адрес + параметр gameId
@@ -269,30 +416,70 @@ const handleLeaveGame = async (gameId) => {
     });
   };
 
+  const handleKickPlayer = async (gameId, targetUserId, targetUserName) => {
+    if (!window.confirm(`Выгнать ${targetUserName}?`)) return;
+
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games/${gameId}/bookings/${targetUserId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+
+      if (response.ok) {
+        // 1. Обновить список на главной (уже с учетом токена внутри fetchGames)
+        await fetchGames(currentUser.id); 
+        
+        // 2. Если мы в модальном окне, обновляем и их
+        if (selectedGame && selectedGame.id === gameId) {
+            // ДОБАВЛЯЕМ headers СЮДА:
+            const resDetail = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games/${gameId}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+            });
+            
+            if (resDetail.ok) {
+                const updatedGame = await resDetail.json();
+                setSelectedGame(updatedGame);
+            }
+        }
+      }
+    } catch (err) {
+      console.error("Ошибка удаления:", err);
+    }
+  };
+
   // --- 4. КОМПОНЕНТЫ ИНТЕРФЕЙСА ---
   if (view === 'loading') return <div className="p-10 font-bold text-center">Загрузка...</div>;
 
-  if (view === 'login') return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-100 p-6">
-      <div className="bg-white p-12 rounded-[3rem] shadow-2xl text-center max-w-sm w-full relative">
-        <h1 className="text-4xl font-black text-emerald-600 mb-2">DICE & MEETS</h1>
-        <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mb-10">Клуб настольных игр</p>
-        
-        {/* Ссылка-кнопка с явными стилями кликабельности */}
-        <a 
-          href={CONFIG.YANDEX_LOGIN_URL} 
-          onClick={(e) => {
-            // Останавливаем "всплытие" события к родительским блокам
-            e.stopPropagation();
-            console.log("Клик по кнопке зафиксирован, переход на:", CONFIG.YANDEX_LOGIN_URL);
-          }}
-          className="relative z-50 inline-block w-full bg-yellow-400 hover:bg-yellow-500 text-black font-black py-5 rounded-2xl transition-all shadow-lg cursor-pointer uppercase tracking-tighter text-sm active:scale-95 text-center"
-        >
-          Войти через Яндекс
-        </a>
+  if (view === 'login') {
+    // 1. Получаем ID отложенной игры из памяти
+    const pendingGameId = localStorage.getItem('pendingGameId');
+    
+    // 2. Формируем динамическую ссылку: если есть ID игры, добавляем его в Query
+    const dynamicLoginUrl = pendingGameId 
+      ? `${CONFIG.API_BASE_URL}/api/v1/auth/yandex/login?gameId=${pendingGameId}`
+      : CONFIG.YANDEX_LOGIN_URL;
+
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-100 p-6">
+        <div className="bg-white p-12 rounded-[3rem] shadow-2xl text-center max-w-sm w-full relative">
+          <h1 className="text-4xl font-black text-emerald-600 mb-2">DICE & MEETS</h1>
+          <p className="text-slate-400 font-bold text-xs uppercase tracking-widest mb-10">Клуб настольных игр</p>
+          
+          <a 
+            href={dynamicLoginUrl} // Используем динамическую ссылку
+            onClick={(e) => {
+              e.stopPropagation();
+              console.log("Переход на авторизацию:", dynamicLoginUrl);
+            }}
+            className="relative z-50 inline-block w-full bg-yellow-400 hover:bg-yellow-500 text-black font-black py-5 rounded-2xl transition-all shadow-lg cursor-pointer uppercase tracking-tighter text-sm active:scale-95 text-center"
+          >
+            Войти через Яндекс
+          </a>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
+
 
   const Header = () => (
     <header className="bg-white border-b border-emerald-100 sticky top-0 z-30 shadow-sm px-6 py-4 flex justify-between items-center text-left">
@@ -311,12 +498,25 @@ const handleLeaveGame = async (gameId) => {
   );
 
   if (view === 'list') {
-    const filtered = games.filter(g => g.title.toLowerCase().includes(searchTerm.toLowerCase()));
+    // Локальная фильтрация больше не нужна, так как API возвращает уже отфильтрованные данные
     return (
       <div className="min-h-screen bg-slate-50 text-left">
         <Header />
         <main className="max-w-6xl mx-auto px-6 py-10">
-          <input type="text" placeholder="Поиск приключений..." className="w-full max-w-md px-6 py-4 rounded-3xl bg-white shadow-sm outline-none mb-10 font-bold border-none focus:ring-2 focus:ring-emerald-500 transition-all" onChange={e => setSearchTerm(e.target.value)} />
+          <input 
+            type="text" 
+            placeholder="Поиск приключений..." 
+            value={searchTerm}
+            className="w-full max-w-md px-6 py-4 rounded-3xl bg-white shadow-sm outline-none mb-10 font-bold border-none focus:ring-2 focus:ring-emerald-500 transition-all" 
+            onChange={e => {
+              const val = e.target.value;
+              setSearchTerm(val);
+              setCurrentPage(0); // Сбрасываем на 1 страницу
+              // Вызываем загрузку с новым поисковым запросом
+              fetchGames(currentUser.id, null, 0, val);
+            }} 
+          />
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
             {(currentUser?.role === ROLES.MASTER || currentUser?.role === ROLES.ADMIN) && (
               <div onClick={() => setView('create')} className="border-4 border-dashed border-emerald-100 rounded-[3rem] flex flex-col items-center justify-center p-10 hover:border-emerald-400 hover:bg-emerald-50 transition-all cursor-pointer group h-[340px] text-center">
@@ -324,7 +524,9 @@ const handleLeaveGame = async (gameId) => {
                 <span className="text-emerald-400 font-black uppercase text-[10px] tracking-widest">Создать игру</span>
               </div>
             )}
-            {filtered.map(game => (
+
+            {/* Используем games напрямую */}
+            {games.map(game => (
               <div key={game.id} onClick={() => { setSelectedGame(game); setView('details'); }} className="bg-white rounded-[3rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-2xl transition-all cursor-pointer h-[340px] flex flex-col relative group">
                 <img src={game.image_url} className="h-40 w-full object-cover" alt="" />
                 <div className="p-8 flex-1 flex flex-col justify-between">
@@ -339,6 +541,41 @@ const handleLeaveGame = async (gameId) => {
               </div>
             ))}
           </div>
+
+          {/* ПАГИНАЦИЯ (теперь с учетом поиска) */}
+          <div className="flex justify-center items-center gap-8 mt-16 pb-10">
+            <button 
+              onClick={() => {
+                const prev = currentPage - 1;
+                setCurrentPage(prev);
+                // Передаем searchTerm, чтобы пагинация не сбрасывала поиск
+                fetchGames(currentUser.id, null, prev * 10, searchTerm);
+              }}
+              disabled={currentPage === 0}
+              className={`px-8 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all border-2 
+                ${currentPage === 0 ? 'border-slate-100 text-slate-200' : 'border-emerald-100 text-emerald-600 hover:border-emerald-500 hover:bg-emerald-50'}`}
+            >
+              ← Назад
+            </button>
+
+            <span className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]">
+              Страница {currentPage + 1}
+            </span>
+
+            <button 
+              onClick={() => {
+                const next = currentPage + 1;
+                setCurrentPage(next);
+                // Передаем searchTerm
+                fetchGames(currentUser.id, null, next * 10, searchTerm);
+              }}
+              disabled={games.length < 10}
+              className={`px-8 py-3 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all border-2 
+                ${games.length < 10 ? 'border-slate-100 text-slate-200' : 'border-emerald-100 text-emerald-600 hover:border-emerald-500 hover:bg-emerald-50'}`}
+            >
+              Вперед →
+            </button>
+          </div>
         </main>
       </div>
     );
@@ -347,24 +584,117 @@ const handleLeaveGame = async (gameId) => {
   if (view === 'admin') return (
     <div className="min-h-screen bg-slate-50 text-left">
       <Header />
-      <main className="max-w-4xl mx-auto px-6 py-10">
-        <button onClick={() => setView('list')} className="text-emerald-600 font-black text-[10px] uppercase mb-6 tracking-widest">← Назад</button>
-        <div className="bg-white p-12 rounded-[3rem] shadow-sm border border-slate-100">
+      <main className="max-w-6xl mx-auto px-6 py-10">
+        <button 
+          onClick={() => setView('list')} 
+          className="text-emerald-600 font-black text-[10px] uppercase mb-6 tracking-widest hover:opacity-70 transition-opacity"
+        >
+          ← Назад
+        </button>
+        
+        <div className="bg-white p-8 md:p-12 rounded-[3rem] shadow-sm border border-slate-100">
           <h2 className="text-3xl font-black text-slate-800 mb-4">Панель управления</h2>
-          <p className="text-slate-400 font-medium mb-10">Обслуживание системы и базы данных приключений.</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <p className="text-slate-400 font-medium mb-10">Обслуживание системы и управление ролями искателей приключений.</p>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+            {/* ЛЕВАЯ КОЛОНКА: Системные действия */}
             <div className="p-8 bg-red-50 rounded-[2rem] border border-red-100">
               <h3 className="font-black text-red-600 uppercase text-xs tracking-widest mb-2">Очистка данных</h3>
-              <p className="text-sm text-red-400 mb-6 font-bold">Удалить все завершенные игры, дата которых меньше текущей.</p>
-              <button onClick={handleCleanupOldGames} className="w-full bg-red-500 hover:bg-red-600 text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-red-100 uppercase text-[10px] tracking-widest">
+              <p className="text-sm text-red-400 mb-6 font-bold">Удалить игры, прошедшие более N дней назад.</p>
+              
+              <div className="flex items-center gap-4 mb-6">
+                <div className="flex-1">
+                  <label className="block text-[10px] uppercase font-black text-red-300 mb-2 ml-1">Старше скольких дней?</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    value={cleanupDays}
+                    onChange={(e) => setCleanupDays(parseInt(e.target.value) || 0)}
+                    className="w-full bg-white border-2 border-red-100 rounded-xl px-4 py-3 text-red-600 font-black focus:outline-none focus:border-red-300 transition-colors"
+                  />
+                </div>
+                <div className="pt-6">
+                  <span className="text-red-200 font-black">ДНЕЙ</span>
+                </div>
+              </div>
+
+              <button 
+                onClick={handleCleanupOldGames} 
+                className="w-full bg-red-500 hover:bg-red-600 text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-red-100 uppercase text-[10px] tracking-widest"
+              >
                 Запустить очистку
               </button>
+              
+              <p className="mt-4 text-[9px] text-red-300 font-bold uppercase text-center tracking-tighter">
+                * 0 удалит вообще все прошедшие игры
+              </p>
+            </div>
+            {/* ПРАВАЯ КОЛОНКА: Управление пользователями */}
+            <div className="lg:col-span-2">
+              <div className="bg-slate-50 p-8 rounded-[2rem] border border-slate-100 min-h-[400px]">
+                
+                {/* ШАПКА СПИСКА С ПОИСКОМ */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+                  <h3 className="font-black text-slate-400 uppercase text-xs tracking-widest">
+                    Зарегистрированные пользователи
+                  </h3>
+                  
+                  <div className="relative w-full md:w-64">
+                    <input 
+                      type="text"
+                      placeholder="Поиск по email..."
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-[10px] font-bold uppercase tracking-wider outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-sm"
+                      onChange={(e) => fetchUsers(e.target.value)} 
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 pointer-events-none">
+                      🔍
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="space-y-4">
+                  {users.length > 0 ? users.map(u => (
+                    <div key={u.id} className="bg-white p-4 rounded-2xl border border-slate-200 flex items-center justify-between shadow-sm hover:border-emerald-100 transition-colors">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-black text-slate-700 truncate max-w-[180px] md:max-w-xs" title={u.email}>
+                          {u.email}
+                        </span>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-tighter">
+                          ID: {u.id} • {u.auth_provider || 'yandex'}
+                        </span>
+                      </div>
+
+                      <div className="relative">
+                        <select 
+                          value={u.role} 
+                          onChange={(e) => handleRoleChange(u.id, e.target.value)}
+                          className={`text-[10px] uppercase font-black tracking-widest py-2 px-4 rounded-lg border-2 transition-all cursor-pointer outline-none
+                            ${u.role === 'администратор' ? 'border-red-100 text-red-500 bg-red-50' : 
+                              u.role === 'мастер' ? 'border-emerald-100 text-emerald-600 bg-emerald-50' : 
+                              'border-slate-100 text-slate-500 bg-slate-50'}`}
+                        >
+                          <option value="игрок">Игрок</option>
+                          <option value="мастер">Мастер</option>
+                          <option value="администратор">Админ</option>
+                        </select>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="text-center py-20 bg-white/50 rounded-[2rem] border border-dashed border-slate-200">
+                      <p className="text-slate-300 font-black uppercase text-[10px] tracking-widest">
+                        Пользователи не найдены
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </main>
     </div>
   );
+
 
   if (view === 'create') return (
     <div className="min-h-screen bg-slate-50 text-left">
@@ -546,11 +876,31 @@ const handleLeaveGame = async (gameId) => {
                   </h3>
                   <div className="flex flex-wrap gap-2">
                     {selectedGame.booked_users && selectedGame.booked_users.length > 0 ? (
-                      selectedGame.booked_users.map((user, idx) => (
-                        <span key={idx} className="bg-white px-3 py-1.5 rounded-full text-xs font-bold text-slate-600 border border-slate-100 shadow-sm">
-                          {user.email.split('@')[0]}
-                        </span>
-                      ))
+                      selectedGame.booked_users.map((u, idx) => {
+                        // Проверка прав: админ или тот, кто создал эту конкретную игру
+                        const canKick = currentUser?.role === 'администратор' || selectedGame.creator_id === currentUser?.id;
+
+                        return (
+                          <span 
+                            key={idx} 
+                            onClick={() => canKick && handleKickPlayer(selectedGame.id, u.id, u.email)}
+                            className={`
+                              px-3 py-1.5 rounded-full text-xs font-bold border shadow-sm transition-all
+                              ${canKick 
+                                ? 'cursor-pointer bg-white text-slate-600 border-slate-100 hover:bg-red-50 hover:border-red-200 hover:text-red-500 group' 
+                                : 'bg-white text-slate-600 border-slate-100'}
+                            `}
+                            title={canKick ? "Нажмите, чтобы исключить игрока" : ""}
+                          >
+                            {u.email.split('@')[0]}
+                            {canKick && (
+                              <span className="ml-1 text-red-300 group-hover:text-red-500 transition-colors">
+                                ×
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })
                     ) : (
                       <span className="text-xs text-slate-400 italic">Пока никто не записался...</span>
                     )}
