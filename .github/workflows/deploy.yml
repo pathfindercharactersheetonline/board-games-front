@@ -1,7 +1,35 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches:
+      - main  # Проверь, чтобы ветка называлась именно так
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: PROD  # Указываем, чтобы подтянулись секреты из окружения PROD
+    
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
           script: |
+            # 1. Заходим в папку фронтенда
             cd ~/my_app/frontend-project
-            git pull origin main
-            echo "${{ secrets.ENV_FILE_FRONTEND }}" > .env
             
-            # Запускаем только фронтенд
+            # 2. Обновляем код
+            git pull origin main
+            
+            # 3. Создаем .env (убедись, что секрет называется ENV_FILE в PROD)
+            echo "${{ secrets.ENV_FILE }}" > .env
+            
+            # 4. Перезапускаем только фронтенд
+            # Docker сам подцепит его к общей сети proxy_network
             docker compose up -d --build
+            
+            # 5. Чистим мусор
+            docker image prune -f
