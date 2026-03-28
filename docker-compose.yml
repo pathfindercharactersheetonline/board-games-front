@@ -1,0 +1,14 @@
+services:
+  frontend:
+    build:
+      context: .
+      args:
+        - VITE_API_URL=${VITE_API_URL}
+    container_name: board_games_frontend
+    restart: always
+    networks:
+      - proxy_network
+
+networks:
+  proxy_network:
+    external: true # Используем уже созданную сеть

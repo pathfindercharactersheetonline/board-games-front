@@ -8,3 +8,6 @@ npm run dev
 
 Как забилдить:
 npm run build
+
+Настройки хостов:
+VITE_API_URL=http://141.8.199.42
