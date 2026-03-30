@@ -4,6 +4,7 @@ import CONFIG from './config';
 const ROLES = { PLAYER: 'игрок', MASTER: 'мастер', ADMIN: 'администратор' };
 
 export default function App() {
+  console.log("Текущее состояние view:", view);
   // --- Вспомогательная функция для даты ---
   const getMoscowDefaultDateTime = () => {
     const date = new Date();
