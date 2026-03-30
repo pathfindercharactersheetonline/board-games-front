@@ -133,6 +133,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    console.log("Приложение стартовало, начинаю проверку...");
     const params = new URLSearchParams(window.location.search);
     const tokenFromUrl = params.get('token');
     
