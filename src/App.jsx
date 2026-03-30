@@ -181,8 +181,8 @@ export default function App() {
       // Если не залогинены, но есть ID в URL — запоминаем его
       if (urlGameId) {
         localStorage.setItem('pendingGameId', urlGameId);
-        setView('login');
       }
+      setView('login');
     }
 
     // Очистка URL — теперь она не удалит sharedGameId из памяти этой функции
