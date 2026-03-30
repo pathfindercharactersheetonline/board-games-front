@@ -42,6 +42,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             cd ~/my_app/frontend-project
+            git checkout docker-compose.yml
             git pull origin main
             echo "${{ secrets.ENV_FILE }}" > .env
             
