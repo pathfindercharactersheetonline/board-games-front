@@ -1,8 +1,13 @@
+// 1. Сначала берем "сырой" URL
+const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+// 2. Гарантируем, что в конце нет лишнего слэша, но есть /api
+const cleanUrl = rawApiUrl.replace(/\/$/, "");
+const finalApiUrl = cleanUrl.endsWith('/api') ? cleanUrl : `${cleanUrl}/api`;
+
 const CONFIG = {
-  // Пытаемся взять из окружения, если нет — ставим дефолт
-  API_BASE_URL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
-  YANDEX_LOGIN_URL: `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/v1/auth/yandex/login`
+  API_BASE_URL: finalApiUrl,
+  YANDEX_LOGIN_URL: `${finalApiUrl}/v1/auth/yandex/login`
 };
 
 export default CONFIG;
-
