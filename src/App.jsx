@@ -409,13 +409,41 @@ export default function App() {
   const handleShare = (gameId) => {
     // Формируем ссылку: текущий адрес + параметр gameId
     const shareUrl = `${window.location.origin}?gameId=${gameId}`;
-    
-    navigator.clipboard.writeText(shareUrl).then(() => {
-      alert("Ссылка скопирована в буфер обмена!");
-    }).catch(err => {
-      console.error("Ошибка копирования:", err);
-    });
+
+    // Проверка на наличие доступа к современному API (для localhost)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(shareUrl)
+        .then(() => alert("Ссылка скопирована в буфер обмена!"))
+        .catch(err => console.error("Ошибка копирования:", err));
+    } else {
+      // Резервный способ для HTTP (VPS по IP)
+      const textArea = document.createElement("textarea");
+      textArea.value = shareUrl;
+      
+      // Делаем поле невидимым, но оставляем в DOM
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      textArea.style.top = "0";
+      document.body.appendChild(textArea);
+      
+      textArea.focus();
+      textArea.select();
+
+      try {
+        const successful = document.execCommand('copy');
+        if (successful) {
+          alert("Ссылка скопирована в буфер обмена!");
+        } else {
+          console.error("Не удалось скопировать");
+        }
+      } catch (err) {
+        console.error("Ошибка при копировании старым методом:", err);
+      }
+
+      document.body.removeChild(textArea);
+    }
   };
+
 
   const handleKickPlayer = async (gameId, targetUserId, targetUserName) => {
     if (!window.confirm(`Выгнать ${targetUserName}?`)) return;
