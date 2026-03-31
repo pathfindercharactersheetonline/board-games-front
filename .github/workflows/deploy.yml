@@ -23,8 +23,6 @@ jobs:
         with:
           context: .
           push: true
-          # Аргументы сборки больше не нужны, так как фронтенд 
-          # теперь использует относительные пути в JS коде
           tags: gennadypol/board-games-frontend:latest
 
   deploy:
@@ -39,17 +37,15 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
-            cd ~/my_app/frontend-project
-            # Обновляем docker-compose на сервере, если он менялся
-            git checkout docker-compose.yml
-            git pull origin main
+            # 1. Заходим в общую папку проекта на VPS
+            cd ~/my_app
             
-            # Обновляем окружение (если нужно для compose)
-            echo "${{ secrets.ENV_FILE }}" > .env
-            
-            # Скачиваем свежий образ и перезапускаем сервис
+            # 2. Скачиваем только новый образ фронтенда из Docker Hub
             docker compose pull frontend
-            docker compose up -d frontend
             
-            # Чистим старые слои образа
+            # 3. Перезапускаем ТОЛЬКО фронтенд. 
+            # Флаг --no-deps гарантирует, что база и бэкенд не перезагрузятся.
+            docker compose up -d --no-deps frontend
+            
+            # 4. Удаляем старые ненужные слои образов, чтобы не забивать диск
             docker image prune -f
