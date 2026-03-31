@@ -894,6 +894,22 @@ export default function App() {
                     <span>Поделиться</span>
                   </button>
                 </div>
+                {/* Дата и время игры */}
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-lg text-[11px] font-black uppercase tracking-wider">
+                    {new Date(selectedGame.date_time).toLocaleDateString('ru-RU', {
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric'
+                    })}
+                  </span>
+                  <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-lg text-[11px] font-black uppercase tracking-wider">
+                    {new Date(selectedGame.date_time).toLocaleTimeString('ru-RU', {
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                </div>
                 <div className="text-slate-500 text-sm mb-8 leading-relaxed border-l-4 border-emerald-100 pl-6 whitespace-pre-line wrap-break-word">
                   {selectedGame.description}
                 </div>
