@@ -368,7 +368,7 @@ export default function App() {
       if (res.ok) {
         await fetchGames(currentUser.id);
         setView('list');
-        // Сброс формы с новой датой по умолчанию
+        // Сброс формы с новой датой и временем по умолчанию
         setNewGame({ 
           title: '', 
           max_players: 4,              // Было maxPlayers
