@@ -26,7 +26,7 @@ export default function App() {
     max_players: 4,              // Было maxPlayers
     date_time: getMoscowDefaultDateTime(), // Было date
     description: '',             // Было desc
-    image_url: 'https://images.unsplash.com', // Было image
+    image_url: 'https://raw.githubusercontent.com/pathfindercharactersheetonline/5XP-league-public/refs/heads/main/avatar%205exp.png', // Было image
     master_name: currentUser?.email || 'Мастер' // НОВОЕ ОБЯЗАТЕЛЬНОЕ ПОЛЕ
   });
   const [users, setUsers] = useState([]);
