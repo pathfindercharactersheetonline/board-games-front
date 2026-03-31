@@ -23,10 +23,8 @@ jobs:
         with:
           context: .
           push: true
-          # Вшиваем IP сервера в билд (замени на свой IP)
-          build-args: |
-            VITE_API_URL=http://${{ secrets.HOST }}/api
-          # Замени 'ваш_логин' на свой логин в Docker Hub
+          # Аргументы сборки больше не нужны, так как фронтенд 
+          # теперь использует относительные пути в JS коде
           tags: gennadypol/board-games-frontend:latest
 
   deploy:
@@ -42,14 +40,16 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             cd ~/my_app/frontend-project
+            # Обновляем docker-compose на сервере, если он менялся
             git checkout docker-compose.yml
             git pull origin main
+            
+            # Обновляем окружение (если нужно для compose)
             echo "${{ secrets.ENV_FILE }}" > .env
             
-            # Скачиваем готовый тяжелый билд с Docker Hub
+            # Скачиваем свежий образ и перезапускаем сервис
             docker compose pull frontend
-            # Просто перезапускаем контейнер (занимает 2 секунды)
             docker compose up -d frontend
             
-            # Удаляем старый образ, чтобы не забивать диск
+            # Чистим старые слои образа
             docker image prune -f
