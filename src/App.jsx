@@ -49,7 +49,7 @@ export default function App() {
           const response = await fetch(url, {
               headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
           });
-          
+          if (response.status === 401) return handleLogout();
           if (response.ok) {
               const data = await response.json();
               setUsers(data);
@@ -73,6 +73,24 @@ export default function App() {
     }
   };
 
+  const authorizedFetch = async (url, options = {}) => {
+    const token = localStorage.getItem('token');
+    const headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`
+    };
+
+    const response = await fetch(url, { ...options, headers });
+
+    if (response.status === 401) {
+      // Токен протух или невалиден
+      handleLogout(); // Вызываем существующую функцию логаута
+      throw new Error('Сессия истекла. Пожалуйста, войдите снова.');
+    }
+
+    return response;
+  };
+
   // --- 2. ЛОГИКА ЗАГРУЗКИ ДАННЫХ ---
   const fetchGames = async (userId, sharedGameId = null, skip = 0, search = "", explicitToken = null) => {
     const LIMIT = 10;
@@ -90,7 +108,7 @@ export default function App() {
       const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+      if (res.status === 401) return handleLogout();
       if (!res.ok) throw new Error('Ошибка сети');
       const data = await res.json();
       setGames(data);
@@ -111,6 +129,7 @@ export default function App() {
                 'Authorization': `Bearer ${explicitToken || localStorage.getItem('token')}` 
               }
             });
+            if (detailRes.status === 401) return handleLogout();
             if (detailRes.ok) {
               const sharedGameData = await detailRes.json();
               setSelectedGame(sharedGameData);
@@ -224,7 +243,7 @@ export default function App() {
         },
         body: JSON.stringify({ game_id: gameId })
       });
-
+      if (res.status === 401) return handleLogout();
       if (res.ok) {
         // 1. Сначала просто обновляем данные через API
         // Если бэкенд возвращает обновленный объект игры в ответе — это лучший вариант:
@@ -250,7 +269,7 @@ export default function App() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
-
+      if (res.status === 401) return handleLogout();
       if (res.ok) {
         await fetchGames(currentUser.id);
         
@@ -258,7 +277,7 @@ export default function App() {
         const detailRes = await fetch(`${CONFIG.API_BASE_URL}/api/v1/games/${gameId}`, {
           headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         });
-        
+        if (detailRes.status === 401) return handleLogout();
         if (detailRes.ok) {
           const freshGame = await detailRes.json();
           setSelectedGame(freshGame);
@@ -279,6 +298,7 @@ export default function App() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
+      if (res.status === 401) return handleLogout();
       if (res.ok) {
         alert("Игра удалена");
         setView('list');
@@ -310,7 +330,7 @@ export default function App() {
           date_time: editingGame.date_time
         })
       });
-
+      if (res.status === 401) return handleLogout();
       if (res.ok) {
         alert("Приключение обновлено!");
         setEditingGame(null);
@@ -365,6 +385,7 @@ export default function App() {
         },
         body: JSON.stringify(newGame)
       });
+      if (res.status === 401) return handleLogout();
       if (res.ok) {
         await fetchGames(currentUser.id);
         setView('list');
@@ -390,7 +411,7 @@ export default function App() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
-      
+      if (res.status === 401) return handleLogout();
       if (res.ok) {
         const result = await res.json();
         alert(`Удалено игр: ${result.deleted_count}`);
