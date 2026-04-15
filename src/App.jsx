@@ -497,6 +497,61 @@ export default function App() {
     }
   };
 
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/upload-image`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: formData
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        // Автоматически подставляем полученную ссылку в состояние формы
+        setNewGame({ ...newGame, image_url: data.image_url });
+        alert("Картинка успешно загружена в GitHub!");
+      }
+    } catch (err) {
+      alert("Ошибка загрузки файла");
+    }
+  };
+
+  const handleFileUploadForEdit = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/api/v1/upload-image`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: formData
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        // Автоматически подставляем полученную ссылку в состояние формы редактирования
+        setEditingGame({ ...editingGame, image_url: data.image_url });
+        alert("Картинка успешно загружена в GitHub!");
+      }
+    } catch (err) {
+      alert("Ошибка загрузки файла");
+    }
+  };
+
+
   // --- 4. КОМПОНЕНТЫ ИНТЕРФЕЙСА ---
   if (view === 'loading') return <div className="p-10 font-bold text-center">Загрузка...</div>;
 
@@ -755,7 +810,13 @@ export default function App() {
           <h2 className="text-3xl font-black text-slate-800 leading-none">Новая игра</h2>
           <div className="space-y-4">
             <input required type="text" placeholder="Название" className="w-full p-4 bg-slate-50 rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500 border-none font-bold" value={newGame.title} onChange={e => setNewGame({...newGame, title: e.target.value})} />
-            <input required type="url" placeholder="URL картинки" className="w-full p-4 bg-slate-50 rounded-2xl outline-none text-xs font-mono border-none" value={newGame.image_url} onChange={e => setNewGame({...newGame, image_url: e.target.value})} />
+            <div className="flex gap-2">
+              <input required type="url" placeholder="URL картинки" className="flex-1 p-4 bg-slate-50 rounded-2xl outline-none text-xs font-mono border-none" value={newGame.image_url} onChange={e => setNewGame({...newGame, image_url: e.target.value})} />
+              <input type="file" id="file-upload-create" className="hidden" onChange={handleFileUpload} accept="image/*" />
+              <label htmlFor="file-upload-create" className="bg-emerald-500 text-white font-black py-4 px-6 rounded-2xl uppercase tracking-widest text-[10px] cursor-pointer hover:bg-emerald-600 transition-all whitespace-nowrap">
+                Загрузить
+              </label>
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <input required type="datetime-local" className="p-4 bg-slate-50 rounded-2xl outline-none font-bold border-none" value={newGame.date_time} onChange={e => setNewGame({...newGame, date_time: e.target.value})} />
               <input required type="number" placeholder="Мест" className="p-4 bg-slate-50 rounded-2xl outline-none font-bold border-none" value={newGame.max_players} onChange={e => setNewGame({...newGame, max_players: Number(e.target.value)})} />
@@ -805,12 +866,18 @@ export default function App() {
               {/* Ссылка на картинку */}
               <div>
                 <label className="text-[10px] font-black uppercase text-slate-400 ml-4 mb-1 block">URL обложки (картинка)</label>
-                <input 
-                  required type="url" 
-                  className="w-full p-4 bg-slate-50 rounded-2xl font-medium text-slate-600 border-2 border-transparent focus:border-emerald-100 outline-none transition-all" 
-                  value={editingGame.image_url} 
-                  onChange={e => setEditingGame({...editingGame, image_url: e.target.value})} 
-                />
+                <div className="flex gap-2">
+                  <input
+                    required type="url"
+                    className="flex-1 p-4 bg-slate-50 rounded-2xl font-medium text-slate-600 border-2 border-transparent focus:border-emerald-100 outline-none transition-all"
+                    value={editingGame.image_url}
+                    onChange={e => setEditingGame({...editingGame, image_url: e.target.value})}
+                  />
+                  <input type="file" id="file-upload-edit" className="hidden" onChange={handleFileUploadForEdit} accept="image/*" />
+                  <label htmlFor="file-upload-edit" className="bg-emerald-500 text-white font-black py-4 px-6 rounded-2xl uppercase tracking-widest text-[10px] cursor-pointer hover:bg-emerald-600 transition-all whitespace-nowrap">
+                    Загрузить
+                  </label>
+                </div>
               </div>
 
               {/* Дата и Количество игроков в одну строку */}
